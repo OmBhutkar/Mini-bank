@@ -12,6 +12,14 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import re
 from PIL import Image
 import base64
+import io
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # Configuration
 DATA_DIR = "data"
@@ -20,6 +28,7 @@ USERS_CSV = os.path.join(DATA_DIR, "users.csv")
 ACCOUNTS_CSV = os.path.join(DATA_DIR, "accounts.csv")
 TXNS_CSV = os.path.join(DATA_DIR, "transactions.csv")
 PINS_CSV = os.path.join(DATA_DIR, "pins.csv")
+BILLS_CSV = os.path.join(DATA_DIR, "bill_payments.csv")
 
 # Page config
 st.set_page_config(
@@ -28,6 +37,91 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Bill Payment Services Configuration
+BILL_SERVICES = {
+    "Mobile Recharge": {
+        "providers": ["Airtel", "Jio", "Vi (Vodafone Idea)", "BSNL", "Idea", "Vodafone"],
+        "icon": "📱",
+        "min_amount": 10,
+        "max_amount": 5000,
+        "field_name": "Mobile Number",
+        "field_placeholder": "Enter 10-digit mobile number",
+        "field_pattern": r"^\d{10}$"
+    },
+    "DTH Recharge": {
+        "providers": ["Tata Sky", "Dish TV", "Airtel Digital TV", "Sun Direct", "D2H", "DEN"],
+        "icon": "📺",
+        "min_amount": 50,
+        "max_amount": 10000,
+        "field_name": "Customer ID",
+        "field_placeholder": "Enter 5-digit customer ID",
+        "field_pattern": r"^\d{5}$"
+    },
+    "Electricity Bill": {
+        "providers": ["MSEB", "Adani Power", "Tata Power", "BEST", "Reliance Energy", "Other"],
+        "icon": "💡",
+        "min_amount": 100,
+        "max_amount": 50000,
+        "field_name": "Consumer Number",
+        "field_placeholder": "Enter 12-digit consumer number",
+        "field_pattern": r"^\d{12}$"
+    },
+    "Gas Bill": {
+        "providers": ["Indian Oil", "Bharat Petroleum", "Hindustan Petroleum", "Indane Gas", "HP Gas", "Bharatgas"],
+        "icon": "🔥",
+        "min_amount": 200,
+        "max_amount": 20000,
+        "field_name": "Consumer Number",
+        "field_placeholder": "Enter 10-digit consumer number",
+        "field_pattern": r"^\d{10}$"
+    },
+    "Water Bill": {
+        "providers": ["Municipal Corporation", "PCMC", "PMC", "KDMC", "TMC", "Other"],
+        "icon": "💧",
+        "min_amount": 50,
+        "max_amount": 10000,
+        "field_name": "Connection ID",
+        "field_placeholder": "Enter 8-digit connection ID",
+        "field_pattern": r"^\d{8}$"
+    },
+    "Internet/Broadband": {
+        "providers": ["Airtel Fiber", "Jio Fiber", "ACT Fibernet", "BSNL", "Hathway", "Tikona"],
+        "icon": "🌐",
+        "min_amount": 100,
+        "max_amount": 15000,
+        "field_name": "Customer ID",
+        "field_placeholder": "Enter 5-digit customer ID",
+        "field_pattern": r"^\d{5}$"
+    },
+    "Insurance Premium": {
+        "providers": ["LIC", "HDFC Life", "ICICI Prudential", "SBI Life", "Max Life", "Bajaj Allianz"],
+        "icon": "🛡️",
+        "min_amount": 500,
+        "max_amount": 100000,
+        "field_name": "Policy Number",
+        "field_placeholder": "Enter 9-digit policy number",
+        "field_pattern": r"^\d{9}$"
+    },
+    "Loan EMI": {
+        "providers": ["SBI", "HDFC Bank", "ICICI Bank", "Axis Bank", "PNB", "BOI"],
+        "icon": "🏠",
+        "min_amount": 1000,
+        "max_amount": 200000,
+        "field_name": "Loan Account Number",
+        "field_placeholder": "Enter 12-digit loan account number",
+        "field_pattern": r"^\d{12}$"
+    },
+    "Credit Card Bill": {
+        "providers": ["SBI Card", "HDFC Bank", "ICICI Bank", "Axis Bank", "Citibank", "American Express"],
+        "icon": "💳",
+        "min_amount": 100,
+        "max_amount": 500000,
+        "field_name": "Credit Card Number",
+        "field_placeholder": "Enter last 4 digits of card",
+        "field_pattern": r"^\d{4}$"
+    },
+}
 
 # Initialize directories and CSV files
 @st.cache_data
@@ -54,6 +148,11 @@ def init_files():
         with open(PINS_CSV, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["user_id", "pin_hash"])
+    
+    if not os.path.exists(BILLS_CSV):
+        with open(BILLS_CSV, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["bill_id", "user_id", "account_no", "service_type", "provider", "customer_id", "amount", "date", "status"])
 
 # Custom CSS
 def load_css():
@@ -119,6 +218,24 @@ def load_css():
             border-radius: 10px;
             box-shadow: 0 5px 15px rgba(0,0,0,0.1);
             margin-bottom: 1rem;
+        }
+        
+        .bill-service-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1.5rem;
+            border-radius: 10px;
+            margin-bottom: 1rem;
+            text-align: center;
+        }
+        
+        .bill-payment-success {
+            background: linear-gradient(135deg, #56ab2f 0%, #a8e6cf 100%);
+            color: white;
+            padding: 1.5rem;
+            border-radius: 10px;
+            text-align: center;
+            margin: 1rem 0;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -261,6 +378,168 @@ def get_transactions_for_account(account_no, limit=100):
     rows.sort(key=lambda r: r["date"], reverse=True)
     return rows[:limit]
 
+# Customer ID Generation
+def generate_customer_id():
+    """Generate a random 5-digit customer ID"""
+    import random
+    return str(random.randint(10000, 99999))
+
+# Download Functions
+def generate_transactions_csv(transactions, username, account_no):
+    """Generate CSV data for transactions"""
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Header
+    writer.writerow(['Mini Bank - Transaction History'])
+    writer.writerow([f'Account Holder: {username}'])
+    writer.writerow([f'Account Number: {account_no}'])
+    writer.writerow([f'Generated on: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'])
+    writer.writerow([])  # Empty row
+    writer.writerow(['Date', 'Time', 'Type', 'Amount (₹)', 'Description'])
+    
+    # Transaction data
+    for t in transactions:
+        try:
+            date_str = t['date'].split('T')[0]
+            time_str = t['date'].split('T')[1].split('.')[0] if 'T' in t['date'] else t['date']
+            
+            # Format transaction type
+            type_display = {
+                'deposit': 'Deposit',
+                'withdraw': 'Withdraw', 
+                'transfer_in': 'Transfer In',
+                'transfer_out': 'Transfer Out',
+                'bill_payment': 'Bill Payment'
+            }.get(t['type'], t['type'])
+            
+            writer.writerow([
+                date_str,
+                time_str,
+                type_display,
+                f"{float(t['amount']):.2f}",
+                t['desc'] or '-'
+            ])
+        except (ValueError, KeyError):
+            continue
+    
+    return output.getvalue()
+
+def generate_transactions_pdf(transactions, username, account_no):
+    """Generate PDF data for transactions"""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    styles = getSampleStyleSheet()
+    story = []
+    
+    # Title
+    title = Paragraph("Mini Bank - Transaction History", styles['Title'])
+    story.append(title)
+    story.append(Spacer(1, 12))
+    
+    # Account info
+    story.append(Paragraph(f"<b>Account Holder:</b> {username}", styles['Normal']))
+    story.append(Paragraph(f"<b>Account Number:</b> {account_no}", styles['Normal']))
+    story.append(Paragraph(f"<b>Generated on:</b> {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
+    story.append(Spacer(1, 20))
+    
+    # Table data
+    table_data = [['Date', 'Time', 'Type', 'Amount (₹)', 'Description']]
+    
+    for t in transactions:
+        try:
+            date_str = t['date'].split('T')[0]
+            time_str = t['date'].split('T')[1].split('.')[0] if 'T' in t['date'] else t['date']
+            
+            # Format transaction type
+            type_display = {
+                'deposit': 'Deposit',
+                'withdraw': 'Withdraw', 
+                'transfer_in': 'Transfer In',
+                'transfer_out': 'Transfer Out',
+                'bill_payment': 'Bill Payment'
+            }.get(t['type'], t['type'])
+            
+            table_data.append([
+                date_str,
+                time_str,
+                type_display,
+                f"{float(t['amount']):.2f}",
+                t['desc'] or '-'
+            ])
+        except (ValueError, KeyError):
+            continue
+    
+    # Create table
+    table = Table(table_data)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    
+    story.append(table)
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+# Bill Payment Functions
+def add_bill_payment(user_id, account_no, service_type, provider, customer_id, amount):
+    bill_id = str(uuid.uuid4())
+    append_csv(BILLS_CSV, ["bill_id", "user_id", "account_no", "service_type", "provider", "customer_id", "amount", "date", "status"], {
+        "bill_id": bill_id,
+        "user_id": user_id,
+        "account_no": account_no,
+        "service_type": service_type,
+        "provider": provider,
+        "customer_id": customer_id,
+        "amount": f"{float(amount):.2f}",
+        "date": datetime.datetime.utcnow().isoformat(),
+        "status": "Completed"
+    })
+    return bill_id
+
+def get_bill_payments_for_user(user_id, limit=50):
+    rows = [b for b in read_csv(BILLS_CSV) if b["user_id"] == user_id]
+    rows.sort(key=lambda r: r["date"], reverse=True)
+    return rows[:limit]
+
+def process_bill_payment(user_id, account_no, service_type, provider, customer_id, amount, pin):
+    # Verify PIN
+    if not verify_user_pin(user_id, pin):
+        return False, "Invalid PIN. Payment cancelled for security."
+    
+    # Get account details
+    account = get_account_by_accountno(account_no)
+    if not account:
+        return False, "Account not found."
+    
+    # Check balance
+    if float(account["balance"]) < amount:
+        return False, "Insufficient funds."
+    
+    # Process payment
+    try:
+        # Deduct amount from account
+        new_balance = float(account["balance"]) - amount
+        update_account_balance(account_no, new_balance)
+        
+        # Add transaction record
+        desc = f"{service_type} - {provider} ({customer_id})"
+        add_transaction(account_no, "bill_payment", amount, desc)
+        
+        # Add bill payment record
+        bill_id = add_bill_payment(user_id, account_no, service_type, provider, customer_id, amount)
+        
+        return True, f"Payment successful! Bill ID: {bill_id[:8]}"
+    except Exception as e:
+        return False, f"Payment failed: {str(e)}"
+
 # Password validation
 def is_password_strong(pw: str) -> bool:
     pattern = r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w\s]).{8,}$'
@@ -268,6 +547,12 @@ def is_password_strong(pw: str) -> bool:
 
 def is_pin_valid(pin: str) -> bool:
     return bool(re.match(r'^\d{4}$', pin))
+
+def validate_service_field(service_type, value):
+    if service_type not in BILL_SERVICES:
+        return False
+    pattern = BILL_SERVICES[service_type]["field_pattern"]
+    return bool(re.match(pattern, value))
 
 # QR Code generation
 def generate_qr_for_account(account_no, data=None):
@@ -370,6 +655,11 @@ def delete_user_data(user_id, account_no):
         pins = [p for p in pins if p["user_id"] != user_id]
         write_csv_atomic(PINS_CSV, ["user_id", "pin_hash"], pins)
         
+        # Delete from bill_payments.csv
+        bills = read_csv(BILLS_CSV)
+        bills = [b for b in bills if b["user_id"] != user_id]
+        write_csv_atomic(BILLS_CSV, ["bill_id", "user_id", "account_no", "service_type", "provider", "customer_id", "amount", "date", "status"], bills)
+        
         # Delete from transactions.csv
         if account_no:
             transactions = read_csv(TXNS_CSV)
@@ -403,7 +693,7 @@ def show_home():
         with col1:
             st.markdown("""
             <div class="feature-box">
-                <h4>🔐 Bank-Grade Security</h4>
+                <h4>🔒 Bank-Grade Security</h4>
                 <p>Your data is protected with industry-standard encryption and secure password hashing.</p>
             </div>
             """, unsafe_allow_html=True)
@@ -439,8 +729,8 @@ def show_home():
             
             st.markdown("""
             <div class="feature-box">
-                <h4>🎨 Modern Design</h4>
-                <p>Beautiful, responsive interface designed for both desktop and mobile.</p>
+                <h4>🧾 Bill Payment System</h4>
+                <p>Pay utilities, mobile recharge, DTH, insurance, and more with secure PIN protection.</p>
             </div>
             """, unsafe_allow_html=True)
     else:
@@ -462,7 +752,7 @@ def show_login():
         st.write("Sign in with your **email** or **10-digit account number**")
         
         email_or_account = st.text_input("📧 Email or 🏦 Account Number")
-        password = st.text_input("🔐 Password", type="password")
+        password = st.text_input("🔒 Password", type="password")
         
         submitted = st.form_submit_button("🚀 Sign In", use_container_width=True)
         
@@ -489,7 +779,7 @@ def show_signup():
         
         username = st.text_input("👤 Full Name")
         email = st.text_input("📧 Email Address")
-        password = st.text_input("🔐 Create Password", type="password")
+        password = st.text_input("🔒 Create Password", type="password")
         initial_deposit = st.number_input("💰 Initial Deposit (Optional)", min_value=0.0, value=0.0, step=0.01)
         
         st.markdown("""
@@ -519,6 +809,210 @@ def show_signup():
         st.session_state.page = 'login'
         st.rerun()
 
+def show_bill_payment():
+    user = st.session_state.current_user
+    account = get_account_by_user(user["user_id"])
+    has_pin = user_has_pin(user["user_id"])
+    
+    st.markdown("""
+    <div class="main-header">
+        <h1>🧾 Bill Payment Center</h1>
+        <p>Pay your bills securely and conveniently</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Auto-generated Customer IDs display
+    st.markdown("### 🆔 Your Auto-Generated Customer IDs")
+    
+    # Generate customer IDs for services that require 5-digit IDs
+    dth_id = generate_customer_id()
+    internet_id = generate_customer_id()
+    
+    st.markdown(f"""
+    <div class="feature-box">
+        <p><strong>📺 DTH Recharge:</strong> <code>{dth_id}</code></p>
+        <p><strong>🌐 Internet/Broadband:</strong> <code>{internet_id}</code></p>
+        <p><em>Use these customer IDs when making payments for the respective services.</em></p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    if not has_pin:
+        st.markdown("""
+        <div class="pin-required-banner">
+            <h3>🔒 PIN Setup Required</h3>
+            <p>To make secure bill payments, please set up your 4-digit PIN first.</p>
+            <p><strong>🚫 All bill payment features are disabled until PIN is set</strong></p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if st.button("🔒 Set PIN Now", use_container_width=True):
+            st.session_state.page = 'dashboard'
+            st.session_state.show_pin_modal = True
+            st.rerun()
+        return
+    
+    # Current balance display
+    st.markdown(f"""
+    <div class="balance-card">
+        <h3>💳 Available Balance</h3>
+        <h2>💰 ₹ {float(account['balance']):.2f}</h2>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # Service Selection
+    st.subheader("🏪 Select Service")
+    
+    # Display available services in a grid
+    cols = st.columns(3)
+    for idx, (service, details) in enumerate(BILL_SERVICES.items()):
+        with cols[idx % 3]:
+            st.markdown(f"""
+            <div class="bill-service-card">
+                <h4>{details['icon']} {service}</h4>
+                <p>₹{details['min_amount']} - ₹{details['max_amount']}</p>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Service selection dropdown
+    selected_service = st.selectbox(
+        "Choose a service:",
+        options=list(BILL_SERVICES.keys()),
+        index=0
+    )
+    
+    if selected_service:
+        service_details = BILL_SERVICES[selected_service]
+        
+        st.markdown("---")
+        st.subheader(f"{service_details['icon']} {selected_service} Payment")
+        
+        with st.form("bill_payment_form"):
+            # Provider selection
+            provider = st.selectbox(
+                "Select Provider:",
+                options=service_details["providers"]
+            )
+            
+            # Customer ID/Number input
+            customer_id = st.text_input(
+                f"{service_details['field_name']}:",
+                placeholder=service_details['field_placeholder'],
+                help=f"Enter your {service_details['field_name'].lower()}"
+            )
+            
+            # Amount input
+            amount = st.number_input(
+                "Payment Amount (₹):",
+                min_value=float(service_details['min_amount']),
+                max_value=float(service_details['max_amount']),
+                step=0.01,
+                help=f"Amount range: ₹{service_details['min_amount']} - ₹{service_details['max_amount']}"
+            )
+            
+            # PIN input
+            pin = st.text_input(
+                "🔒 Enter 4-digit PIN:",
+                type="password",
+                max_chars=4,
+                help="Enter your secure 4-digit PIN to authorize payment"
+            )
+            
+            # Payment button
+            submitted = st.form_submit_button(
+                f"💳 Pay ₹{amount:.2f}",
+                use_container_width=True
+            )
+            
+            if submitted:
+                # Validation
+                if not customer_id:
+                    st.error(f"Please enter {service_details['field_name'].lower()}")
+                elif not validate_service_field(selected_service, customer_id):
+                    st.error(f"Invalid {service_details['field_name'].lower()} format")
+                elif not is_pin_valid(pin):
+                    st.error("PIN must be exactly 4 digits")
+                elif amount < service_details['min_amount'] or amount > service_details['max_amount']:
+                    st.error(f"Amount must be between ₹{service_details['min_amount']} and ₹{service_details['max_amount']}")
+                else:
+                    # Process payment
+                    success, message = process_bill_payment(
+                        user["user_id"], 
+                        account["account_no"], 
+                        selected_service, 
+                        provider, 
+                        customer_id, 
+                        amount, 
+                        pin
+                    )
+                    
+                    if success:
+                        st.markdown(f"""
+                        <div class="bill-payment-success">
+                            <h3>✅ Payment Successful!</h3>
+                            <p><strong>{message}</strong></p>
+                            <p>Service: {selected_service}</p>
+                            <p>Provider: {provider}</p>
+                            <p>Customer ID: {customer_id}</p>
+                            <p>Amount Paid: ₹{amount:.2f}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Auto-refresh to show updated balance
+                        st.rerun()
+                    else:
+                        st.error(f"Payment Failed: {message}")
+    
+    st.markdown("---")
+    
+    # Recent Bill Payments
+    st.subheader("📋 Recent Bill Payments")
+    
+    bill_payments = get_bill_payments_for_user(user["user_id"])
+    
+    if bill_payments:
+        # Convert to DataFrame for better display
+        df_data = []
+        for bill in bill_payments:
+            try:
+                date_str = bill['date'].split('T')[0]
+                time_str = bill['date'].split('T')[1].split('.')[0] if 'T' in bill['date'] else bill['date']
+                
+                df_data.append({
+                    'Date': date_str,
+                    'Time': time_str,
+                    'Service': bill['service_type'],
+                    'Provider': bill['provider'],
+                    'Customer ID': bill['customer_id'],
+                    'Amount': f"₹ {float(bill['amount']):.2f}",
+                    'Status': bill['status'],
+                    'Bill ID': bill['bill_id'][:8] + "..."
+                })
+            except (ValueError, KeyError):
+                continue
+        
+        if df_data:
+            df = pd.DataFrame(df_data)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No valid bill payment records found.")
+    else:
+        st.info("No bill payments made yet. Start by paying your first bill!")
+    
+    # Navigation buttons
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🏠 Back to Dashboard", use_container_width=True):
+            st.session_state.page = 'dashboard'
+            st.rerun()
+    
+    with col2:
+        if st.button("🔄 Refresh", use_container_width=True):
+            st.rerun()
+
 def show_dashboard():
     user = st.session_state.current_user
     account = get_account_by_user(user["user_id"])
@@ -541,7 +1035,7 @@ def show_dashboard():
     if not has_pin:
         st.markdown("""
         <div class="pin-required-banner">
-            <h3>🔐 Security Setup Required</h3>
+            <h3>🔒 Security Setup Required</h3>
             <p>To protect your account and enable transactions, please set up your 4-digit PIN.</p>
             <p><strong>🚫 All transactions are disabled until PIN is set</strong></p>
         </div>
@@ -559,6 +1053,19 @@ def show_dashboard():
             <h2>💰 ₹ {float(account['balance']):.2f}</h2>
         </div>
         """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # Quick Actions
+        st.subheader("⚡ Quick Actions")
+        
+        action_col1, action_col2 = st.columns(2)
+        
+        with action_col1:
+            if st.button("🧾 Pay Bills", use_container_width=True, key="pay_bills_btn"):
+                st.session_state.page = 'bill_payment'
+                st.rerun()
+        
         
         st.markdown("---")
         
@@ -639,7 +1146,7 @@ def show_dashboard():
         else:
             st.markdown("""
             <div class="warning-message">
-                <h4>🔒 Security Notice</h4>
+                <h4>🔐 Security Notice</h4>
                 <p>Set up your 4-digit PIN to start making transactions.</p>
                 <p><strong>All transaction features are currently disabled for security.</strong></p>
             </div>
@@ -673,7 +1180,7 @@ def show_dashboard():
         st.markdown("---")
         
         # PIN Management
-        st.subheader("🔐 PIN Security")
+        st.subheader("🔒 PIN Security")
         
         if has_pin:
             st.success("✅ PIN is set and active")
@@ -688,13 +1195,13 @@ def show_dashboard():
             """, unsafe_allow_html=True)
         
         # PIN Setup/Change
-        if st.button("🔐 Set PIN" if not has_pin else "🔄 Change PIN", use_container_width=True, key="set_pin_btn"):
+        if st.button("🔒 Set PIN" if not has_pin else "🔄 Change PIN", use_container_width=True, key="set_pin_btn"):
             st.session_state.show_pin_modal = True
         
         # PIN Setup Modal
         if st.session_state.show_pin_modal:
             st.markdown("---")
-            st.subheader("🔐 Set PIN" if not has_pin else "🔄 Change PIN")
+            st.subheader("🔒 Set PIN" if not has_pin else "🔄 Change PIN")
             
             with st.form("pin_setup_form"):
                 pin = st.text_input("Enter 4-digit PIN", type="password", max_chars=4, key="new_pin")
@@ -721,7 +1228,7 @@ def show_dashboard():
                         if has_pin:
                             st.success("PIN updated successfully! Your transactions are now secured with the new PIN.")
                         else:
-                            st.success("PIN set successfully! You can now make secure deposits, withdrawals, and transfers.")
+                            st.success("PIN set successfully! You can now make secure deposits, withdrawals, transfers, and bill payments.")
                         st.rerun()
     
     st.markdown("---")
@@ -731,6 +1238,31 @@ def show_dashboard():
     txns = get_transactions_for_account(account["account_no"])
     
     if txns:
+        # Download buttons
+        col1, col2, col3 = st.columns([1, 1, 4])
+        
+        with col1:
+            if st.button("📄 Download CSV", use_container_width=True, key="download_csv"):
+                csv_data = generate_transactions_csv(txns, user['username'], account['account_no'])
+                st.download_button(
+                    label="💾 Download CSV File",
+                    data=csv_data,
+                    file_name=f"transactions_{account['account_no']}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    key="csv_download"
+                )
+        
+        with col2:
+            if st.button("📋 Download PDF", use_container_width=True, key="download_pdf"):
+                pdf_data = generate_transactions_pdf(txns, user['username'], account['account_no'])
+                st.download_button(
+                    label="📄 Download PDF File",
+                    data=pdf_data,
+                    file_name=f"transactions_{account['account_no']}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                    mime="application/pdf",
+                    key="pdf_download"
+                )
+        
         # Convert to DataFrame for better display
         df_data = []
         for t in txns:
@@ -743,7 +1275,8 @@ def show_dashboard():
                     'deposit': '💰 Deposit',
                     'withdraw': '💸 Withdraw', 
                     'transfer_in': '📥 Transfer In',
-                    'transfer_out': '📤 Transfer Out'
+                    'transfer_out': '📤 Transfer Out',
+                    'bill_payment': '🧾 Bill Payment'
                 }.get(t['type'], t['type'])
                 
                 df_data.append({
@@ -762,20 +1295,25 @@ def show_dashboard():
         else:
             st.info("No valid transactions found.")
     else:
-        st.info("No transactions yet. " + ("Start by making a deposit or transfer!" if has_pin else "Set your PIN first, then start making transactions!"))
+        st.info("No transactions yet. " + ("Start by making a deposit, transfer, or bill payment!" if has_pin else "Set your PIN first, then start making transactions!"))
     
     st.markdown("---")
     
     # Account Management
     st.subheader("⚙️ Account Management")
     
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("🏠 Home", use_container_width=True, key="dash_home"):
             st.session_state.page = 'home'
             st.rerun()
     
     with col2:
+        if st.button("🧾 Bill Payments", use_container_width=True, key="dash_bills"):
+            st.session_state.page = 'bill_payment'
+            st.rerun()
+    
+    with col3:
         if st.button("🚪 Logout", use_container_width=True, key="dash_logout"):
             logout_user()
             st.success("Logged out successfully.")
@@ -829,6 +1367,9 @@ def main():
             if st.button("📊 Dashboard", use_container_width=True, key="sidebar_dashboard"):
                 st.session_state.page = 'dashboard'
                 st.rerun()
+            if st.button("🧾 Bill Payments", use_container_width=True, key="sidebar_bills"):
+                st.session_state.page = 'bill_payment'
+                st.rerun()
             if st.button("🏠 Home", use_container_width=True, key="sidebar_home_logged"):
                 st.session_state.page = 'home'
                 st.rerun()
@@ -871,6 +1412,12 @@ def main():
                 st.rerun()
             else:
                 show_dashboard()
+        elif st.session_state.page == 'bill_payment':
+            if not st.session_state.logged_in:
+                st.session_state.page = 'login'
+                st.rerun()
+            else:
+                show_bill_payment()
         else:
             st.session_state.page = 'home'
             st.rerun()
